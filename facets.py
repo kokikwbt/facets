@@ -36,7 +36,7 @@ class Facets():
 
 
     def em(self, X, n_latent_factors=(),
-           _lambda=None, n_iter=10):
+           _lambda=None, n_iter=1):
 
         self.M, self.N, W, S_, zeta = _parse_input(X)
 
@@ -46,7 +46,7 @@ class Facets():
             # self._lambda = np.zeros(self.M)
             self._lambda = np.ones(self.M)
 
-        _em(X, W, S_, zeta, n_latent_factors, self._lambda,
+        _em(X, W, S_, zeta, self.latent_rank, self._lambda,
             self.M, self.N, self.U_, self.B_, self.Z0,
             self.sgm_o_, self.sgm_0_, self.sgm_r_, self.xi_, self.sgm_v_)
 
@@ -60,7 +60,7 @@ class Facets():
                           for m in range(self.M)])
         self.B_ = np.array([np.random.randn(self.latent_rank[m], self.latent_rank[m])
                           for m in range(self.M)])
-        self.Z0 = np.random.randn(*self.latent_rank)
+        self.Z0 = np.random.rand(*self.latent_rank)
         """
             simplify the covariances by assuming that
             the each noise is independent and identically distributed (i.i.d.)
@@ -79,14 +79,13 @@ class Facets():
 
 def _parse_input(X):
     M = np.ndim(X) - 1  # ignore time mode
-    N = X.shape[1:]
-    W = np.isnan(X)
-    S_ = []
+    N = X.shape[1:]  
+    W = ~np.isnan(X)
+    S_ = [None] * M
     for m in range(M):
-        n_dim = N[m]
         X_m = unfold(X, m + 1)
         X_m[np.isnan(X_m)] = 0.
-        S_.append(np.corrcoef(X_m))
+        S_[m] = np.corrcoef(X_m)
     zeta = None
     return M, N, W, S_, zeta
 
@@ -127,20 +126,66 @@ def _E_step(X, W, Z0, U, B, sgm_o_, sgm_0_, sgm_r_, xi_, sgm_v_):
         phi[t] = (np.eye(P[t-1].shape[0]) - K[t] @ H_t) @ P[t-1]
 
     # backward
-    muh[-1] = mu[-1]  # ?
-    phih[-1] = phi[-1]  # ?
+    muh[-1] = mu[-1]  #
+    phih[-1] = phi[-1]  #
     for t in reversed(range(T-1)):
         print(t)
         J[t] = phi[t] @ B.T @ np.linalg.inv(P[t])
         muh[t] = mu[t] + J[t] @ (muh[t+1] - B @ mu[t])
         phih[t] = phi[t] + J[t] @ (phih[t+1] - P[t]) @ J[t].T
 
+    E_z = muh
+    cov_z = phih
+    cov__ = [None] + [phih[t] @ J[t-1].T for t in range(1, T)]
+    E_z_ = [None] + [cov__[t] + muh[t] @ muh[t-1].T for t in range(1, T)]
+    E_zz = [cov_z[t] + muh[t] @ muh[t-1].T for t in range(T)]
 
+    return E_z, cov_z, cov__, E_z_, E_zz
 
+def _M_step(X_, W_, mode, N, L, S, U_, B_, E_V, E_VV, E_z, cov_z, cov__, E_z_, E_zz, _lambda, xi_, sgm_v_):
+    T = len(X_)
+    B = kronecker(B_)
+    U = kronecker(U_)
 
-def _M_step():
-    pass
+    Z0 = E_z[0]
 
+    _L =  np.prod(L)
+    sgm_0_ = (np.trace(E_zz[0] - E_z[0] @ E_z[0].T)) / _L
+
+    sgm_o_ = np.trace(np.sum(E_zz[1:]) - B * np.sum(E_z_[1:])
+                      - np.sum(E_z_[1:]) * B.T + B * np.sum(E_zz[:-1]) @ B.T
+                      ) / (T - 1) * _L
+    print('Sigma_O', sgm_o_)
+
+    num = 0
+    W_sum = np.sum(W_)
+    for t in range(T):
+        X_vec = X_[t].flatten()
+        W_vec = W_[t].flatten()
+        X_vec = X_vec[W_vec]
+        U_sub = U[W_vec, :]
+        # np.trace(U_sub @ E_zz[t] @ U_sub.T) can be smaller then 0
+        num += X_vec.T @ X_vec + np.trace(U_sub @ E_zz[t] @ U_sub.T) - 2 * X_vec.T @ U_sub @ E_z[t]
+    sgm_r_ = num / W_sum
+    print('Sigma_R', sgm_r_)
+
+    if _lambda > 0:
+        U_m = U_[mode]
+        # update xi and sigma_V_m
+        xi_ = np.sum([S[j, :] @ S[j, :].T - 2 * S[j, :].T @ U_m @ E_V[j]
+                    + np.trace(U_m @ E_VV[j] @ U_m.T)
+                    for j in range(N[mode])]) / N[mode] ** 2
+        print('xi_m:', xi_)
+
+        sgm_v_ = np.sum([np.trace(E_VV[j]) for j in range(N[mode])]) / N[mode] * L[mode] 
+        print('Sigma_Vm:', sgm_v_)
+
+    # update B and U
+
+    if _lambda > 0:
+        pass
+
+    return Z0, sgm_o_, sgm_0_, sgm_r_, xi_, sgm_v_
 
 def _em(X, W, S_, zeta, L, _lambda,
         M, N, U_, B_, Z0, sgm_o_, sgm_0_, sgm_r_, xi_, sgm_v_, n_iter=10):
@@ -149,17 +194,18 @@ def _em(X, W, S_, zeta, L, _lambda,
     """
     X_ = unfold(X, 0)
     W_ = unfold(W, 0)
-
+    print(np.sum(W_), W_.size)
     Z0 = Z0.flatten()
 
+    E_V = [None] * M
+    E_VV = [None] * M
     for m in range(M):
-        X_m = [unfold(X[t], m) for t in range(len(X))]
-        W_m = [unfold(W[t], m) for t in range(len(W))]
+        E_V_ = [None] * N[m]
+        E_VV_ = [None] * N[m]
         if _lambda[m] > 0:
             for j in range(N[m]):
-                # infer expectations
-                EV, EVV = E_vj(S_[m], U_[m], xi_[m], sgm_v_[m])
-
+                E_V_[j], E_VV_[j] = E_vj(S_[m], U_[m], xi_[m], sgm_v_[m])
+        E_V[m], E_VV[m] = E_V_, E_VV_
 
     """
         EM algorithm
@@ -169,13 +215,17 @@ def _em(X, W, S_, zeta, L, _lambda,
     B = kronecker(B_)
     for _ in range(n_iter):
         for m in range(M):
-            _E_step(X_, W_, Z0, U, B, sgm_o_, sgm_0_, sgm_r_, xi_[m], sgm_v_[m])
 
-            _M_step()
+            E_z, cov_z, cov__, E_z_, E_zz = _E_step(
+                X_, W_, Z0, U, B, sgm_o_, sgm_0_, sgm_r_, xi_[m], sgm_v_[m]
+            )
 
-            if _lambda[m] > 0:
-                # update
-                pass
+            Z0, sgm_o_, sgm_0_, sgm_r_, xi_[m], sgm_v_[m] = _M_step(
+                X_, W_, m, N, L, S_[m], U_, B_, E_V[m], E_VV[m],
+                E_z, cov_z, cov__, E_z_, E_zz, _lambda[m],
+                xi_[m], sgm_v_[m]
+            )
+
 
 def reconstruct_matrix(U, Z, mode):
     # Lemma 3.2
@@ -191,4 +241,4 @@ if __name__ == '__main__':
     X = X.reshape(t, l, k)  # T * N_1 * ... * N_M
 
     fc = Facets(latent_rank=(10, 5))
-    fc.em(X)
+    fc.em(X[-10:])
