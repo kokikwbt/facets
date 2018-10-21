@@ -2,11 +2,13 @@ import os
 import time
 import itertools
 import numpy as np
+import numpy.ma as ma
+import scipy as sp
 import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import normalize
 from tensorly.tenalg import kronecker
-from tensorly import fold, unfold, kruskal_to_tensor
+from tensorly import fold, unfold, partial_unfold, kruskal_to_tensor
 # from sktensor import unfold
 
 from dataset import import_tensor, normalize_tensor
@@ -27,67 +29,106 @@ class Facets():
         Output: model parameter set, i.e., 
         ...
     """
-    def __init__(self, latent_rank=None,
-                 transition_tensor=None, transition_covariance=None,
-                 initial_covariance=None,
-                 initial_latent_factor=None,  # Z_0
-                 ):
-        self.latent_rank = latent_rank
+    def __init__(self, tensor, latent_rank, contextual_weights):
+        self.M = tensor.ndim - 1
+        self.N = tensor.shape[:-1]
+        indicator_tensor = ~np.isnan(tensor)
+        contextual_matrices = _compute_contextual_matrices(tensor, self.M)
+        map_func = None
 
+        self.R = {
+            'X': tensor,
+            'W': indicator_tensor,
+            'S': contextual_matrices,
+            'zeta': map_func,
+            'M': self.M,
+            'N': self.N,
+        }
+        self.L = latent_rank
+        self._lambda = contextual_weights
 
-    def em(self, X, n_latent_factors=(),
-           _lambda=None, n_iter=1):
-
-        self.M, self.N, W, S_, zeta = _parse_input(X)
+    def em(self, n_iter_max=10):
 
         self._initialize_parameters()
 
-        if not _lambda or not len(_lambda) == self.M:
-            # self._lambda = np.zeros(self.M)
-            self._lambda = np.ones(self.M)
+        # calculate the expectations of V(m)
+        _compute_EV(self.R, self._lambda, self.theta)
 
-        _em(X, W, S_, zeta, self.latent_rank, self._lambda,
-            self.M, self.N, self.U_, self.B_, self.Z0,
-            self.sgm_o_, self.sgm_0_, self.sgm_r_, self.xi_, self.sgm_v_)
-
+        # start EM algorithm
+        for _ in range(n_iter_max):
+            self.theta = _em(self.R, self.M, self.N,
+                             self.L, self._lambda, self.theta)
 
     def sample(self):
         pass
 
 
     def _initialize_parameters(self):
-        self.U_ = np.array([np.random.randn(self.N[m], self.latent_rank[m])
-                          for m in range(self.M)])
-        self.B_ = np.array([np.random.randn(self.latent_rank[m], self.latent_rank[m])
-                          for m in range(self.M)])
-        self.Z0 = np.random.rand(*self.latent_rank)
-        """
-            simplify the covariances by assuming that
-            the each noise is independent and identically distributed (i.i.d.)
-        """
+        rand_func = np.random.rand
+
+        U_ = np.array([rand_func(self.N[m], self.L[m])
+                      for m in range(self.M)])
+        # for m in range(self.M):
+        #     plt.imshow(U_[m])
+        #     plt.show()
+
+        B_ = np.array([rand_func(self.L[m], self.L[m])
+                      for m in range(self.M)])
+        # for m in range(self.M):
+        #     plt.imshow(B_[m])
+        #     plt.show()
+
+        Z0 = rand_func(*self.L)
+
         # contextual_covariance
-        self.xi_ = np.random.randn(self.M)
+        xi_ = np.random.randn(self.M)
+
         # observation_covariance
-        self.sgm_r_ = np.random.rand()
+        sigma_R = np.random.rand()
+
         # transition_covariance
-        self.sgm_o_ = np.random.rand()
+        sigma_O = np.random.rand()
+
         # initial_factor_covariance
-        self.sgm_0_ = np.random.rand()
+        sigma_0 = np.random.rand()
+
         # latent_variable_covariance
-        self.sgm_v_ = np.random.rand(self.M) * .1
+        sigma_V_ = np.random.rand(self.M)
 
+        self.theta = {
+            "U": U_, "B": B_, "Z0": Z0,
+            "sigma_O": sigma_O, "sigma_0": sigma_0, "sigma_R": sigma_R,
+            "xi": xi_, "sigma_V": sigma_V_
+        }
 
-def _parse_input(X):
-    M = np.ndim(X) - 1  # ignore time mode
-    N = X.shape[1:]  
-    W = ~np.isnan(X)
-    S_ = [None] * M
+def _compute_contextual_matrices(tensor, n_modes):
+    return [pd.DataFrame(unfold(tensor, m).T).corr().values for m in range(n_modes)]
+
+def _compute_EV(R, _lambda, theta):
+    X = R['X']
+    W = R['W']
+    S = R['S']
+    M = R['M']
+    N = R['N']
+    T = X.shape[-1]
+    Xt = np.moveaxis(X, -1, 0)
+
+    U_ = theta["U"]
+    xi = theta["xi"]
+    sigma_V = theta["sigma_V"]
+
+    Evj = [None] * M
+    Evjvj = [None] * M
     for m in range(M):
-        X_m = unfold(X, m + 1)
-        X_m[np.isnan(X_m)] = 0.
-        S_[m] = np.corrcoef(X_m)
-    zeta = None
-    return M, N, W, S_, zeta
+        Xt_ = np.array([unfold(Xt[t], m) for t in range(T)])
+        if _lambda[m] > 0:
+            for j in range(N[m]):
+                upsilon = sp.linalg.inv(U_[m].T @ U_[m] + xi[m] / sigma_V[m])
+                Evj[m] = upsilon @ U_[m].T @ S[m][j, :]
+                Evjvj[m] = upsilon + Evj[m] @ Evj[m].T
+    return Evj, Evjvj
+
+
 
 def E_vj(S, U, xi, sgm_v):
     # gamma: L(m) * L(m)
@@ -233,12 +274,19 @@ def reconstruct_matrix(U, Z, mode):
     ind[mode] = False
     return np.dot(np.dot(U[mode], unfold(Z, mode)), kronecker(U[ind]).T)
 
+
 if __name__ == '__main__':
 
     X, L = import_tensor('./dat/apple/')
     l, t, k = X.shape
     X = normalize_tensor(X)
-    X = X.reshape(t, l, k)  # T * N_1 * ... * N_M
+    X = np.moveaxis(X, 1, -1)  # N_1 * ... * N_M * T
+    print(X.shape)
+    L = [10, 5]
+    _lambda = np.ones(X.ndim-1)
+    # for i in range(l):
+    #     plt.plot(X[:,i,:])
+    #     plt.show()
 
-    fc = Facets(latent_rank=(10, 5))
+    fc = Facets(X, L, _lambda)
     fc.em(X[-10:])
