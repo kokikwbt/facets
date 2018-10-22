@@ -2,15 +2,20 @@ import os
 import time
 import itertools
 import numpy as np
+import numpy.ma as ma
+import scipy as sp
 import pandas as pd
 import matplotlib.pyplot as plt
 import tensorly as tl
+import pprint
 from sklearn.preprocessing import normalize
 from tensorly.tenalg import kronecker
 from tensorly import fold, unfold, vec_to_tensor, kruskal_to_tensor
 # from sktensor import unfold
 
 from dataset import import_tensor, normalize_tensor
+
+pp = pprint.PrettyPrinter(indent=2)
 
 class Facets():
     """
@@ -28,233 +33,275 @@ class Facets():
         Output: model parameter set, i.e., 
         ...
     """
-    def __init__(self, latent_rank=None,
-                 transition_tensor=None, transition_covariance=None,
-                 initial_covariance=None,
-                 initial_latent_factor=None,  # Z_0
-                 ):
-        self.latent_rank = latent_rank
+    def __init__(self, tensor, latent_rank, contextual_weights):
+        self.M = tensor.ndim - 1
+        self.N = tensor.shape[:-1]
+        indicator_tensor = ~np.isnan(tensor)
+        contextual_matrices = _compute_contextual_matrices(tensor, self.M)
+        map_func = None
 
+        self.R = {
+            'X': tensor,
+            'W': indicator_tensor,
+            'S': contextual_matrices,
+            'zeta': map_func,
+            'M': self.M,
+            'N': self.N,
+        }
+        self.L = latent_rank
+        self._lambda = contextual_weights
 
-    def em(self, X, n_latent_factors=(),
-           _lambda=None, n_iter=1):
-
-        self.M, self.N, W, S_, zeta = _parse_input(X)
+    def em(self, n_iter_max=10):
 
         self._initialize_parameters()
 
-        if not _lambda or not len(_lambda) == self.M:
-            # self._lambda = np.zeros(self.M)
-            self._lambda = np.ones(self.M)
+        # calculate the expectations of V(m)
+        Evj, Evjvj, = _compute_expect_context(self.R, self._lambda, self.theta)
+        pp.pprint(Evj)
 
-        _em(X, W, S_, zeta, self.latent_rank, self._lambda,
-            self.M, self.N, self.U_, self.B_, self.Z0,
-            self.sgm_o_, self.sgm_0_, self.sgm_r_, self.xi_, self.sgm_v_)
-
+        # start EM algorithm
+        for _ in range(n_iter_max):
+            self.theta = _em(self.R, self.L, self._lambda, self.theta,
+                             Evj, Evjvj)
 
     def sample(self):
         pass
 
 
     def _initialize_parameters(self):
+        rand_func = np.random.rand
 
-        # observation tensor
-        self.U_ = np.array([np.random.randn(self.N[m], self.latent_rank[m])
-                          for m in range(self.M)])
-        # multi-linear transition tensor
-        self.B_ = [np.random.randn(self.latent_rank[m], self.latent_rank[m])
-                          for m in range(self.M)]
-        # initial latent factor
-        self.Z0 = np.random.rand(*self.latent_rank)
+        U_ = np.array([rand_func(self.N[m], self.L[m])
+                      for m in range(self.M)])
+        # for m in range(self.M):
+        #     plt.imshow(U_[m])
+        #     plt.show()
 
-        """
-            simplify the covariances by assuming that
-            the each noise is independent and identically distributed (i.i.d.)
-        """
+        B_ = np.array([rand_func(self.L[m], self.L[m])
+                      for m in range(self.M)])
+        # for m in range(self.M):
+        #     plt.imshow(B_[m])
+        #     plt.show()
+
+        Z0 = rand_func(*self.L)
+
         # contextual_covariance
-        self.xi_ = np.random.randn(self.M)
+        xi_ = np.random.randn(self.M)
+
         # observation_covariance
-        self.sgm_r_ = np.random.rand()
-        # multi-linear transition covariance
-        self.sgm_o_ = np.random.rand()
+        sigma_R = np.random.rand()
+
+        # transition_covariance
+        sigma_O = np.random.rand()
+
         # initial_factor_covariance
-        self.sgm_0_ = np.random.rand()
+        sigma_0 = np.random.rand()
+
         # latent_variable_covariance
-        self.sgm_v_ = np.random.rand(self.M)
+        sigma_V_ = np.random.rand(self.M)
 
+        self.theta = {
+            "U": U_, "B": B_, "Z0": Z0,
+            "sigma_O": sigma_O, "sigma_0": sigma_0, "sigma_R": sigma_R,
+            "xi": xi_, "sigma_V": sigma_V_
+        }
 
-def _parse_input(X):
-    M = np.ndim(X) - 1  # ignore time mode
-    N = X.shape[1:]  
-    W = ~np.isnan(X)
-    S_ = [None] * M
+def _compute_contextual_matrices(tensor, n_modes):
+    return [pd.DataFrame(unfold(tensor, m).T).corr().values for m in range(n_modes)]
+
+def _compute_expect_context(R, _lambda, theta):
+    X, W, S, M, N = R['X'], R["W"], R["S"], R["M"], R["N"]
+    T = X.shape[-1]
+    Xt = np.moveaxis(X, -1, 0)
+
+    U_ = theta["U"]
+    xi = theta["xi"]
+    sigma_V = theta["sigma_V"]
+
+    Evj = [[None] * N[m] for m in range(M)]
+    Evjvj = [[None] * N[m] for m in range(M)]
+
     for m in range(M):
-        X_m = unfold(X, m + 1)
-        X_m[np.isnan(X_m)] = 0.
-        S_[m] = np.corrcoef(X_m)
-    zeta = None
-    return M, N, W, S_, zeta
+        Xt_ = np.array([unfold(Xt[t], m) for t in range(T)])
+        if not _lambda[m] > 0:
+            continue
+        for j in range(N[m]):
+            upsilon = sp.linalg.inv(U_[m].T @ U_[m] + xi[m] / sigma_V[m])
+            Evj[m][j] = upsilon @ U_[m].T @ S[m][j, :]
+            Evjvj[m][j] = upsilon + Evj[m][j] @ Evj[m][j].T
 
-def E_vj(S, U, xi, sgm_v):
-    gamma = np.linalg.inv(U.T @ U + xi / sgm_v)
-    vj = gamma @ U.T @ S
-    # print(vj.shape)
-    return vj, gamma + vj @ vj.T
+    return Evj, Evjvj
 
-def _E_step(X, W, Z0, U, B, sgm_o_, sgm_0_, sgm_r_, xi_, sgm_v_):
-    T = len(X)
+def _em(R, L, _lambda, theta, Evj, Evjvj):
+    X, W, S, M, N = R['X'], R["W"], R["S"], R["M"], R["N"]
+    T = X.shape[-1]
+    Xt = unfold(np.moveaxis(X, -1, 0), 0)  # time-mode unfold
+    Wt = unfold(np.moveaxis(W, -1, 0), 0)
+
+    B = theta["B"]
+    U = theta["U"]
+
+    for m in range(M):
+        """
+        Infer the expectations and covariances of
+        vectorized latent factors.
+        """
+        Ez, covzz_, Ezz_, covzz, Ezz, = _estep(Xt, Wt, R, theta)
+
+        """
+        Update parameters
+        """
+        theta = _mstep(Xt, Wt, R, L, m, _lambda[m], theta, Evj, Evjvj, Ez, Ezz_, Ezz)
+        covZZ_ = reshape_covariance(covzz_[1:], L, m)
+        covZZ = reshape_covariance(covzz, L, m)
+        EZ = reshape_expectation(Ez, L, m)
+        B[m] = update_transition_tensor(m, B, L, covZZ, covZZ_, EZ)
+        # plt.imshow(B[m]); plt.colorbar(), plt.show()
+        U[m] = update_observation_tensor(m, R, L, U, EZ, Evj, Evjvj, covZZ)
+
+        # if _lambda[m] > 0:
+            # update the expectations related to V(m)
+
+            #     E_V_ = [None] * N[m]
+            #     E_VV_ = [None] * N[m]
+            #     for j in range(N[m]):
+            #         E_V_[j], E_VV_[j] = E_vj(S_[m][j, :], U_[m], xi_[m], sgm_v_[m])
+            #     E_V[m], E_VV[m] = E_V_, E_VV_
+
+    return theta
+
+def _estep(Xt, Wt, R, theta):
+    print('Xt:', Xt.shape)
+    U = kronecker(theta["U"][::-1])
+    B = kronecker(theta["B"][::-1])
+    print('U:', U.shape, 'B', B.shape)
+
+    z0 = theta["Z0"].reshape(-1)
+    sigma_R = theta["sigma_R"]
+    sigma_O = theta["sigma_O"]
+    sigma_0 = theta["sigma_0"]
+    sigma_V = theta["sigma_V"]
+
+    T = len(Xt)
     K = [None] * T
     P = [None] * T
     J = [None] * T
     mu = [None] * T
-    muh = [None] * T
+    mu_hat = [None] * T
     psi = [None] * T
-    psih = [None] * T
+    psi_hat = [None] * T
 
     # forward
     for t in range(T):
-
-        o_t = W[t, :]  # indices of the observed entries of a tensor X
-        x_t = X[t, o_t]
-        H_t = U[o_t, :]
+        print(f't = {t}')
+        print('---> # of observations:', Wt[t].sum())
+        ot = Wt[t, :]  # indices of the observed entries of a tensor X
+        xt = Xt[t, ot]
+        Ht = U[ot, :]
+        print('---> Ht', Ht.shape)
 
         if t == 0:
-            K[t] = sgm_0_ * H_t.T @ np.linalg.inv(sgm_0_ * H_t @ H_t.T + sgm_r_ * np.eye(H_t.shape[0]))
-            mu[t] = Z0 + K[t] @ (x_t - H_t @ Z0)
-            psi[t] = sgm_0_ * np.eye(K[t].shape[0]) - K[t] @ H_t
+            K[0] = sigma_0 * Ht.T @ sp.linalg.inv(sigma_0 * Ht @ Ht.T + sigma_R * np.eye(Ht.shape[0]))
+            mu[0] = z0 + K[0] @ (xt - Ht @ z0)
+            psi[0] = sigma_0 * np.eye(K[0].shape[0]) - K[0] @ Ht
+            # pp.pprint(K[0])
+            # pp.pprint(mu[0])
+            # pp.pprint(psi[0])
 
         else:
-            P[t-1] = B @ psi[t-1] @ B.T + sgm_o_ * np.eye(B.shape[0])
-            K[t] = P[t-1] @ H_t.T @ np.linalg.inv(H_t @ P[t-1] @ H_t.T + sgm_r_ * np.eye(H_t.shape[0]))
-            mu[t] = B @ mu[t-1] + K[t] @ (x_t - H_t @ B @ mu[t-1])
-            psi[t] = (np.eye(P[t-1].shape[0]) - K[t] @ H_t) @ P[t-1]
+            P[t-1] = B @ psi[t-1] @ B.T + sigma_O * np.eye(B.shape[0])
+            K[t] = P[t-1] @ Ht.T @ sp.linalg.inv(Ht @ P[t-1] @ Ht.T + sigma_R * np.eye(Ht.shape[0]))
+            mu[t] = B @ mu[t-1] + K[t] @ (xt - Ht @ B @ mu[t-1])
+            psi[t] = (np.eye(K[t].shape[0]) - K[t] @ Ht) @ P[t-1]
+            # pp.pprint(P[t-1])
+            # pp.pprint(K[t])
+            # pp.pprint(mu[t])
+            # pp.pprint(psi[t])
 
     # backward
-    muh[-1] = mu[-1]  #
-    psih[-1] = psi[-1]  #
+    mu_hat[-1] = mu[-1]  #
+    psi_hat[-1] = psi[-1]  #
     for t in reversed(range(T-1)):
-        print(t)
-        J[t] = psi[t] @ B.T @ np.linalg.inv(P[t])
-        muh[t] = mu[t] + J[t] @ (muh[t+1] - B @ mu[t])
-        psih[t] = psi[t] + J[t] @ (psih[t+1] - P[t]) @ J[t].T
+        print(f't = {t}')
+        J[t] = psi[t] @ B.T @ sp.linalg.inv(P[t])
+        mu_hat[t] = mu[t] + J[t] @ (mu_hat[t+1] - B @ mu[t])
+        psi_hat[t] = psi[t] + J[t] @ (psi_hat[t+1] - P[t]) @ J[t].T
 
-    E_z = muh
-    cov_z = psih
-    cov__ = [None] + [psih[t] @ J[t-1].T for t in range(1, T)]
-    E_z_ = [None] + [cov__[t] + muh[t] @ muh[t-1].T for t in range(1, T)]
-    E_zz = [psih[t] + muh[t] @ muh[t].T for t in range(T)]
+    Ez = mu_hat
+    covzz_ = [None] + [psi_hat[t] @ J[t-1].T for t in range(1, T)]
+    Ezz_ = [None] + [covzz_[t] + mu_hat[t] @ mu_hat[t-1].T for t in range(1, T)]
+    covzz = psi_hat
+    Ezz = [psi_hat[t] + mu_hat[t] @ mu_hat[t].T for t in range(T)]
 
-    return E_z, cov_z, cov__, E_z_, E_zz
+    pp.pprint(Ez)
+    pp.pprint(covzz_)
+    pp.pprint(Ezz_)
+    pp.pprint(covzz)
+    pp.pprint(Ezz)
 
-def _M_step(X_, W_, mode, N, L, S, U_, B_, E_V, E_VV, E_z, cov_z, cov__, E_z_, E_zz, _lambda, xi_, sgm_v_):
-    T = len(X_)
-    B = kronecker(B_[::-1])
-    U = kronecker(U_[::-1])
+    return Ez, covzz_, Ezz_, covzz, Ezz
 
-    Z0 = E_z[0]
-    _L =  np.prod(L)
+def _mstep(Xt, Wt, R, L, m, _lambda, theta, Evj, Evjvj, Ez, Ezz_, Ezz):
+    M = R["M"]
+    N = R["N"]
+    Sm = R["S"][m]
+    T = R["X"].shape[-1]
+    U = kronecker(theta["U"][::-1])
+    B = kronecker(theta["B"][::-1])
+    U_ = theta["U"]
+    Um = theta["U"][m]
+    """
+    Equation (12)
+    """
+    vec_Z0_new = Ez[0]
 
-    sgm_0_ = (np.trace(E_zz[0] - E_z[0] @ E_z[0].T)) / _L
+    sigma_0_new = np.trace(Ezz[0] - Ez[0] @ Ez[0].T) / np.prod(L)  # Ez[0].T ?
 
-    sgm_o_ = np.trace(
-        np.sum(E_zz[1:])
-        - B * np.sum(E_z[1:])  # ?
-        - np.sum(E_z_[1:]) * B.T + B * np.sum(E_zz[:-1]) @ B.T
-    ) / (T - 1) * _L
-    print('Sigma_O', sgm_o_)
+    sigma_O_new = np.trace(
+        sum(Ezz[1:])
+        # - B * sum(Ezz_[1:])  # ?
+        # - sum(Ezz_[1:] @ B.T)  # ?
+        + B * sum(Ezz[:-1] @ B.T)
+    ) / ((T - 1) * np.prod(L))
 
-    num = 0
-    W_sum = np.sum(W_)
+    val = 0
     for t in range(T):
-        X_vec = X_[t].flatten()
-        W_vec = W_[t].flatten()
-        X_vec = X_vec[W_vec]
-        U_sub = U[W_vec, :]
-        # np.trace(U_sub @ E_zz[t] @ U_sub.T) can be smaller then 0
-        num += X_vec.T @ X_vec + np.trace(U_sub @ E_zz[t] @ U_sub.T) - 2 * X_vec.T @ U_sub @ E_z[t]
-    sgm_r_ = num / W_sum
-    print('Sigma_R', sgm_r_)
+        vec_Wt = Wt[t].reshape(-1)
+        vec_Xt = Xt[t].reshape(-1)[vec_Wt]
+        mat_U_obs = U[vec_Wt, :]
+        val += (vec_Xt.T @ vec_Xt
+                + np.trace(mat_U_obs @ Ezz[t] @ mat_U_obs.T)
+                - 2 * vec_Xt.T @ mat_U_obs @ Ez[t])
+
+    sigma_R_new = val / Wt.sum()
+
+    theta["Z0"] = vec_Z0_new
+    theta["sigma_O"] = sigma_O_new
+    theta["sigma_0"] = sigma_0_new
+    theta["sigma_R"] = sigma_R_new
 
     if _lambda > 0:
-        U_m = U_[mode]
-        # update xi and sigma_V_m
-        xi_ = np.sum([S[j, :] @ S[j, :].T - 2 * S[j, :].T @ U_m @ E_V[j]
-                    + np.trace(U_m @ E_VV[j] @ U_m.T)
-                    for j in range(N[mode])]) / N[mode] ** 2
-        print('xi_m:', xi_)
+        sigma_Vm_new = sum([np.trace(Evjvj[m][j]) for j in range(N[m])]) / (N[m] * L[m])
 
-        sgm_v_ = np.sum([np.trace(E_VV[j]) for j in range(N[mode])]) / N[mode] * L[mode] 
-        print('Sigma_Vm:', sgm_v_)
+        xim_new = sum([Sm[j, :].T @ Sm[j, :] - 2 * Sm.T[j, :] @ Um @ Evj[m][j]
+                      + np.trace(Um @ Evjvj[m][j] @ Um.T)
+                      for j in range(N[m])]
+                      ) / N[m] ** 2
+        theta["xi"][m] = xim_new
+        theta["sigma_V"][m] = sigma_Vm_new
 
-    # update B and U
+    pp.pprint(theta)
+    return theta
 
-    if _lambda > 0:
-        pass
-
-    return Z0, sgm_o_, sgm_0_, sgm_r_, xi_, sgm_v_
-
-def _em(X, W, S_, zeta, L, _lambda,
-        M, N, U_, B_, Z0, sgm_o_, sgm_0_, sgm_r_, xi_, sgm_v_, n_iter=10):
-    """
-        compute the expectations of V^(m) before the first iteration.
-    """
-    X_ = unfold(X, 0)
-    W_ = unfold(W, 0)
-    Z0 = Z0.flatten()
-    E_V = [None] * M
-    E_VV = [None] * M
-    for m in range(M):
-        E_V_ = [None] * N[m]
-        E_VV_ = [None] * N[m]
-        if _lambda[m] > 0:
-            for j in range(N[m]):
-                E_V_[j], E_VV_[j] = E_vj(S_[m][j, :], U_[m], xi_[m], sgm_v_[m])
-                # print(E_V_[j].shape, E_VV_[j].shape)
-        E_V[m], E_VV[m] = E_V_, E_VV_
-
-    """
-        EM algorithm
-    """
-
-    U = kronecker(U_[::-1])
-    B = kronecker(B_[::-1])
-    for _ in range(n_iter):
-        for m in range(M):
-
-            E_z, cov_z, cov__, E_z_, E_zz = _E_step(
-                X_, W_, Z0, U, B, sgm_o_, sgm_0_, sgm_r_, xi_[m], sgm_v_[m]
-            )
-
-            Z0, sgm_o_, sgm_0_, sgm_r_, xi_[m], sgm_v_[m] = _M_step(
-                X_, W_, m, N, L, S_[m], U_, B_, E_V[m], E_VV[m],
-                E_z, cov_z, cov__, E_z_, E_zz, _lambda[m],
-                xi_[m], sgm_v_[m]
-            )
-
-            B_[m] = update_transition_tensor(m, B_, cov_z, cov__, E_z)
-
-            U_[m] = update_observation_tensor(X, W, N, S_[m], E_z, L, U_, E_V[m], E_VV[m], cov_z, m, xi_[m], _lambda[m], sgm_r_)
-
-            if _lambda[m] > 0:
-                # update the expectations related to V(m)
-                E_V_ = [None] * N[m]
-                E_VV_ = [None] * N[m]
-                for j in range(N[m]):
-                    E_V_[j], E_VV_[j] = E_vj(S_[m][j, :], U_[m], xi_[m], sgm_v_[m])
-                E_V[m], E_VV[m] = E_V_, E_VV_
-
-    return U_, Z, V
-
-def update_observation_tensor(X, W, N, S, Z, L, U, E_V, E_VV, cov_Z, mode, xi, _lambda, sgm_R):
-
-    M = len(N)
+def update_observation_tensor(mode, R, L, U, EZ, Ev, Evv, covZZ):
+    M = R["M"]
+    N = R["N"]
+    S = R["S"]
     G = kronecker([U[m] for m in range(M) if not m == mode][::-1]).T
-    # print('G', G.shape)
-    cov_Z = reshape_covariance(cov_Z, L, mode)
 
     for i in range(U[mode].shape[0]):
 
-        A_11, A_12, A_21, A_22 = _compute_A(X, W, N, S[i, :], Z, L, E_V, E_VV, cov_Z, G, mode, i)
+        A_11, A_12, A_21, A_22 = _compute_A(X, W, N, S[i, :], Z, L, Ev, Evv, covZZ, G, mode, i)
 
         numer = _lambda * A_11 / xi + (1 - _lambda) * A_12 / sgm_R
         denom = _lambda * A_21 / xi + (1 - _lambda) * A_22 / sgm_R
@@ -305,24 +352,18 @@ def _compute_A(X, W, N, S, Z, L, V, VV, cov_Z, G, mode, i):
     print('A_22:', A_22.shape)
     return A_11, A_12, A_21, np.sum(A_22, axis=0)
 
-def update_transition_tensor(mode, B, cov_z, cov_z_, E_z):
-
-    T = len(cov_z)
+def update_transition_tensor(mode, B, L, covZZ, covZZ_, EZ):
+    T = len(covZZ)
     M = len(B)
     F = kronecker([B[m] for m in range(M) if not m == mode][::-1]).T
-    L = [B[m].shape[0] for m in range(M)]
-    L_n = int(np.prod(L) / B[mode].shape[0])
-    cov_z = reshape_covariance(cov_z, L, mode)
-    cov_z_ = [None] + reshape_covariance(cov_z_[1:], L, mode)
-    E_z = reshape_expectation(E_z, L, mode)
+    Ln = int(np.prod(L) / B[mode].shape[0])
     C_1 = C_2 = 0
-
     for t in range(1, T):
-        for j in range(L_n):
-            C_1 += _compute_b(F[:, j], cov_z[t - 1])
-            C_1 += E_z[t-1] * (F[j] @ F.T[j]) @ E_z[t-1].T
-            C_2 += _compute_a(F[:, j], cov_z_[t][:, j, :, :])
-            C_2 += E_z[t-1] * F.T[j] @ E_z[t-1].T
+        for j in range(Ln):
+            C_1 += _compute_b(F[:, j], covZZ[t-2])
+            C_1 += EZ[t-1] * (F[j] @ F.T[j]) @ EZ[t-1].T
+            C_2 += _compute_a(F[:, j], covZZ_[t-1][:, j, :, :])
+            C_2 += EZ[t-1] * F.T[j] @ EZ[t-1].T
     return C_2 / C_1
 
 def _compute_a(F, cov):
@@ -378,7 +419,11 @@ if __name__ == '__main__':
     X, L = import_tensor('./dat/apple/')
     l, t, k = X.shape
     X = normalize_tensor(X)
-    X = X.reshape(t, l, k)  # T * N_1 * ... * N_M
+    X = np.moveaxis(X, 1, -1)  # N_1 * ... * N_M * T
+    print(X.shape)
 
-    fc = Facets(latent_rank=(10, 5))
-    fc.em(X[-10:])
+    L = [10, 5]
+    _lambda = np.ones(X.ndim-1)
+
+    facets = Facets(X[:, :, -20:], L, _lambda)
+    facets.em()
