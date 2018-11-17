@@ -7,10 +7,8 @@ from sklearn.preprocessing import scale
 from sklearn.metrics import mean_squared_error
 from scipy.linalg import pinv
 from tqdm import tqdm, trange
-from pprint import PrettyPrinter
 from myplot import *
-warnings.
-pp = PrettyPrinter(indent=4)
+warnings.filterwarnings("ignore")
 
 class DCMF(object):
     """

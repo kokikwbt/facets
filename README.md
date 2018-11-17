@@ -8,9 +8,9 @@ and Fast Mining of a Network of Coevolving Time Series
 \[[download](http://ycai.ws.gc.cuny.edu/files/2015/03/NoT_sdm15.pdf)\].
 
 ## facets.py
-### Usage
-`$python3 facets.py`
+#### Usage
+`$ python3 facets.py`
 
 ## dcmf.py
-### Usage
-`$python3 dcmf.py`
+#### Usage
+`$ python3 dcmf.py`
