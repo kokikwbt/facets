@@ -8,7 +8,15 @@ This is a Python implementation for
 
 ## facets.py
 
-#### Usage
+#### Quick usage
+```python
+  # X: nd-array ()
+  # rank:
+  # weights:
+  facets = Facets(X, rank, weights)
+  facets.em(max_iter=20)
+  facets.save_params()
+```
 
 `$ python3 facets.py`
 
