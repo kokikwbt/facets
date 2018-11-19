@@ -44,8 +44,15 @@ def fit_scatter(X, Y, outfn=''):
         plt.savefig(outfn+str(i)+'.png')
         plt.close()
 
-def heatmap(M, outfn=''):
-    plt.figure()
+def heatmap(M, figure=True, title='', xlabel='', ylabel='',
+            show=False, close=False, outfn=''):
+    if figure: plt.figure()
     sns.heatmap(M)
-    plt.savefig(outfn)
-    plt.close()
+    if title: plt.title(title)
+    if xlabel: plt.xlabel(xlabel)
+    if ylabel: plt.ylabel(ylabel)
+    if show: plt.show()
+    if outfn:
+        plt.savefig(outfn)
+        plt.close()
+    if close: plt.close()

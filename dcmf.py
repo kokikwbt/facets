@@ -101,8 +101,8 @@ class DCMF(object):
                 xt = self.X[t, ot]
                 Ht = self.U[ot, :]
                 res += np.trace(Ht @ ztt[t] @ Ht.T)
-                res += xt.T @ xt - 2 * xt @ (Ht @ zt[t])
-            self.sgmX = res / np.sum(self.W)
+                res += xt @ xt - 2 * xt @ (Ht @ zt[t])
+            self.sgmX = res / self.W.sum()
 
             print('===> sgmV:', self.sgmV)
             print('===> sgmX:', self.sgmX)
