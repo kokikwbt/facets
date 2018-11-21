@@ -13,14 +13,14 @@ Given a N-dimensional tensor series,
 
 #### Parameters:
 
-- X: nd-array
+- X: nd-array  
     tensor of shape N_1 x N_2 x ... x T
-- ranks: int list
+- ranks: int list  
     size of latent tensor Z
     (len(ranks) == tensor.ndim)
-- weights: float list
-    weight of contextual information for each mode of X.
-    if weight = 0, then the contextual information is ignored.
+- weights: float list  
+    weight of contextual information for each mode of X.  
+    if weight = 0, then the contextual information is ignored.  
     if weight = 1, then only the contextual information included to learn observation tensor U.
 
 #### Example
