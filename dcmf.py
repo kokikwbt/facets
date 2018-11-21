@@ -243,7 +243,7 @@ if __name__ == '__main__':
     X = np.loadtxt('./dat/86_11.amc.4d', delimiter=',')
     X = scale(X)
 
-    model = DCMF(X, 4, weight=.2)
+    model = DCMF(X, 4, weight=1)
     model.em(max_iter=100)
     print('rmse:', model.rmse)
     model.save_model()
