@@ -8,7 +8,9 @@ This is a Python implementation for
 
 ## Facets
 Given a N-dimensional tensor series,
-`facets.Facets(X, ranks, weights)`
+
+`facets.**Facets**(X, ranks, weights)`
+
 Parameters:
     - X: nd-array
         tensor of shape N_1 x N_2 x ... x T
