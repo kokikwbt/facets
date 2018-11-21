@@ -509,10 +509,10 @@ if __name__ == '__main__':
 
     geo = [185, 179, 172, 153, 86, 83, 56, 53, 48]
     # settings
-    rank = [3, 4]
-    weights = [.8, .8]
+    ranks = [3, 4]
+    weights = [0, 0]
 
     # infer
-    facets = Facets(X[geo, :, -400:], rank, weights)
+    facets = Facets(X[geo, :, -100:], ranks, weights)
     facets.em(max_iter=50)
     facets.save_params()
