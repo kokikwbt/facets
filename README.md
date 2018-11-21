@@ -9,9 +9,9 @@ This is a Python implementation for
 ## Facets
 Given a N-dimensional tensor series,
 
-`facets.**Facets**(X, ranks, weights)`
+### facets.**Facets**(X, ranks, weights)
 
-Parameters:
+#### Parameters:
 
     - X: nd-array
         tensor of shape N_1 x N_2 x ... x T
@@ -20,20 +20,15 @@ Parameters:
         (len(ranks) == tensor.ndim)
     - weights: float list
         weight of contextual information for each mode of X.
-        if weight = 0, then the contextual information is ignored. if weight = 1, then only the contextual information included to learn observation tensor U.
+        if weight = 0, then the contextual information is ignored.
+        if weight = 1, then only the contextual information included to learn observation tensor U.
 
-###### example
+#### Example
 ```python
-  # X: nd-array ()
-  # rank:
-  # weights:
   facets = Facets(X, rank, weights)
   facets.em(max_iter=20)
   facets.save_params()
 ```
 
-`$ python3 facets.py`
-
 ## DCMF
 #### Usage
-`$ python3 dcmf.py`
