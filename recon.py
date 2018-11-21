@@ -36,5 +36,5 @@ for j in range(Xn.shape[1]):
         plt.subplot(211)
         plt.plot(X[j, i, :])
         plt.plot(Xn[:, j, i])
-        plt.ylim([-0.2, 1])
+        # plt.ylim([-0.2, 1])
 plt.show()

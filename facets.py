@@ -122,14 +122,14 @@ class Facets(object):
         if setseed: np.random.seed(777)
         L, M, N = self.L, self.M, self.N
         rand_func = np.random.rand
-        self.U = [rand_func(N[m], L[m]) for m in range(M)]
-        self.B = [rand_func(L[m], L[m]) for m in range(M)]
-        self.Z0 = rand_func(*self.L)
-        self.sgm0 = rand_func()
-        self.sgmO = rand_func()
-        self.sgmR = rand_func()
-        self.sgmV = rand_func(M)
-        self.xi = rand_func(M)
+        self.U = [rand_func(N[m], L[m]) * 2 - 1 for m in range(M)]
+        self.B = [rand_func(L[m], L[m]) * 2 - 1 for m in range(M)]
+        self.Z0 = rand_func(*self.L) * 2 - 1
+        self.sgm0 = rand_func() * 5
+        self.sgmO = rand_func() * 5
+        self.sgmR = rand_func() * 5
+        self.sgmV = rand_func(M) * 2
+        self.xi = rand_func(M) * 2
 
     def _initialize_logger(self):
         self.llh = []
@@ -299,8 +299,8 @@ def _e_step(Xt, Wt, T, L, N, U, B, Z0, sgm0, sgmO, sgmR, sgmV):
             # K[0] = sgm0 * Ht.T @ pinv(Ht @ (sgm0 * np.eye(Lp)) @ Ht.T + sgmR * np.eye(lt))
             # K[0] = sgm0 * np.eye(Lp) @ Ht.T @ pinv(Ht @ (sgm0 * np.eye(Lp)) @ Ht.T + sgmR * np.eye(lt))
             mu_[0] = z0 + K[0] @ (xt - Ht @ z0)
-            psi[0] = sgm0 * np.eye(Lp) - K[0] @ Ht
-            # psi[0] = sgm0 * (np.eye(Lp) - K[0] @ Ht)
+            # psi[0] = sgm0 * np.eye(Lp) - K[0] @ Ht
+            psi[0] = sgm0 * (np.eye(Lp) - K[0] @ Ht)
             # psi[0] = (np.eye(Lp) - K[0] @ Ht) @ (sgm0 * np.eye(Lp))
         else:
             P[t-1] = B @ psi[t-1] @ B.T + sgmO * np.eye(Lp)
@@ -386,9 +386,10 @@ def update_observation_tensor(
         )
         numer = _lambda * A_11 / xi + (1 - _lambda) * A_12 / sgmR
         denom = _lambda * A_21 / xi + (1 - _lambda) * A_22 / sgmR
-        print(numer)
-        print(denom)
         U[mode][i, :] = numer @ pinv(denom)
+        row = numer @ pinv(denom)
+        # print(col, col.std())
+    print(U[mode])
     return U[mode]
 
 def _compute_A(_lambda, mode, i, G, Xt, Wt, T, S,
@@ -407,6 +408,10 @@ def _compute_A(_lambda, mode, i, G, Xt, Wt, T, S,
             Wtm[i, j] * Xtm[i, j] * EZ[t] @ G[:, j]  # ?
             for j in range(Np)
         ])
+        # for j in range(Np):
+            # heatmap(_compute_b(G, cov_ZZt[t], j))
+            # heatmap(EZ[t] @ np.outer(G[:, j], G[:, j]) @ EZ[t].T)
+        # plt.show()
         A_22 += sum([
             Wtm[i, j] * (
                 _compute_b(G, cov_ZZt[t], j)
@@ -427,9 +432,9 @@ def update_transition_tensor(mode, B, L, covZZt, covZZ_, EZ):
     for t in trange(1, T, desc=f'update B[{mode}]'):
         for j in range(Lm):
             C1 += _compute_b(F, covZZt[t-1], j)  # t = 1..T-1
-            C1 += EZ[t-1] @ np.outer(F[:, j], F[j, :]) @ EZ[t-1].T
+            C1 += EZ[t-1] @ np.outer(F[:, j], F[:, j]) @ EZ[t-1].T
             C2 += _compute_a(F, covZZ_[t-1], j)  # t = 2..T
-            C2 += np.outer(EZ[t, :, j], F[j, :]) @ EZ[t-1].T
+            C2 += np.outer(EZ[t, :, j], F[:, j]) @ EZ[t-1].T
             # C2 += EZ[t, :, j] @ F[:, j] @ EZ[t-1].T
     # print(C1.shape, C2.shape, EZ[0].T.shape)
     return C2 @ pinv(C1)
@@ -499,7 +504,12 @@ if __name__ == '__main__':
 
     # load dataset
     X, countries = import_tensor('./dat/apple/')
-    X = normalize_tensor(X)
+    # X = normalize_tensor(X)
+    Y = X.flatten()
+    Y = Y - np.nanmean(Y)
+    Y /= np.nanstd(Y)
+    print(np.nanmean(Y), np.nanstd(Y))
+    X = Y.reshape(X.shape)
     X = np.moveaxis(X, 1, -1)  # N_1 * ... * N_M * T
     for i, geo in enumerate(countries):
         print(i, geo.name)
@@ -511,6 +521,6 @@ if __name__ == '__main__':
     weights = [0, 0]
 
     # infer
-    facets = Facets(X[geo, :, -300:], ranks, weights)
-    facets.em(max_iter=25)
+    facets = Facets(X[170:190, :, -300:], ranks, weights)
+    facets.em(max_iter=10)
     facets.save_params()
