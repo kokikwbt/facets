@@ -414,7 +414,7 @@ def _compute_A(_lambda, mode, i, G, Xt, Wt, T, S,
         # plt.show()
         A_22 += sum([
             Wtm[i, j] * (
-                _compute_b(G, cov_ZZt[t], j)
+                # _compute_b(G, cov_ZZt[t], j)
                 + EZ[t] @ np.outer(G[:, j], G[:, j]) @ EZ[t].T
             )
             # for j in range(Lp)
@@ -431,9 +431,9 @@ def update_transition_tensor(mode, B, L, covZZt, covZZ_, EZ):
     C1 = C2 = 0
     for t in trange(1, T, desc=f'update B[{mode}]'):
         for j in range(Lm):
-            C1 += _compute_b(F, covZZt[t-1], j)  # t = 1..T-1
+            # C1 += _compute_b(F, covZZt[t-1], j)  # t = 1..T-1
             C1 += EZ[t-1] @ np.outer(F[:, j], F[:, j]) @ EZ[t-1].T
-            C2 += _compute_a(F, covZZ_[t-1], j)  # t = 2..T
+            # C2 += _compute_a(F, covZZ_[t-1], j)  # t = 2..T
             C2 += np.outer(EZ[t, :, j], F[:, j]) @ EZ[t-1].T
             # C2 += EZ[t, :, j] @ F[:, j] @ EZ[t-1].T
     # print(C1.shape, C2.shape, EZ[0].T.shape)
@@ -456,6 +456,7 @@ def _compute_b(F, cov, j):
     I = range(I)
     Q = range(Q)
     K = range(K)
+    # print(b.shape, F.shape, cov.shape)
     for p, i, q, k in itertools.product(P, I, Q, K):
         b[p, q] += F[k, j] * F[i, j] * cov[p, i, q, k]
     return b
@@ -516,11 +517,11 @@ if __name__ == '__main__':
 
     geo = [185, 179, 172, 153, 86, 83, 56, 53, 48]
     # settings
-    ranks = [6, 4]
+    ranks = [4, 3]
     # weights = [1, 1]
-    weights = [0, 0]
+    weights = [1, 1]
 
     # infer
-    facets = Facets(X[170:190, :, -300:], ranks, weights)
-    facets.em(max_iter=10)
+    facets = Facets(X[geo[:5], :, -300:], ranks, weights)
+    facets.em(max_iter=20)
     facets.save_params()

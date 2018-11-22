@@ -12,9 +12,9 @@ U1 = np.loadtxt(outdir+"U_1.txt")
 
 rank = [3, 4]
 T = X.shape[-1]
-Z = np.zeros((T, 6,4))
+Z = np.zeros((T, 4,3))
 for t in range(T):
-    Z[t] = z[t].reshape((6,4))
+    Z[t] = z[t].reshape((4,3))
 # print(Z.shape)
 # Z = np.moveaxis(Z, 1,2)
 # print(Z.shape)
@@ -29,7 +29,14 @@ print(rank)
 # for t in range(T):
 #     Xn[t] = U0 @ unfold(Z[t], 0) @ U1.T
 
+for i in range(X.shape[0]):
+    plt.subplot(211)
+    plt.plot(X[i, :, :].T)
+    plt.subplot(212)
+    plt.plot(Xn[:, i, :])
+    plt.show()
 
+exit()
 for j in range(Xn.shape[1]):
     for i in range(Xn.shape[2]):
         plt.figure()
@@ -37,4 +44,4 @@ for j in range(Xn.shape[1]):
         plt.plot(X[j, i, :])
         plt.plot(Xn[:, j, i])
         # plt.ylim([-0.2, 1])
-plt.show()
+    plt.show()
