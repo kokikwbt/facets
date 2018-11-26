@@ -7,7 +7,7 @@ Pyhton inplementation of:
 
 ## Facets
 Given a Network of High-order Time Series (Net-Hits)
-$\mathcal{R}=(\mathcal{X},\mathcal{W},\mathcal{S},\zeta)$
+[\\\mathcal{R}=(\mathcal{X},\mathcal{W},\mathcal{S},\zeta)\\]
 Given a N-dimensional tensor series,
 
 facets.**Facets**(X, ranks, weights)
