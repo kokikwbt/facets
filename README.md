@@ -31,4 +31,7 @@ __init__(self, X, ranks, weights)
 
 
 ## DCMF
-#### Usage
+The dynamic contextual matrix factorization algorithm encodes
+both contextual information and temporal dynamics.
+It is a special case of Facets algorithm
+where the order of input tensor M = 1.
