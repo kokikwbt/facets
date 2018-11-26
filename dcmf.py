@@ -188,6 +188,7 @@ def backward(l, X, W, U, B, z0, psi0, sgmX, sgmZ, mu_, psi, K, P):
         J[t] = psi[t] @ B.T @ pinv(P[t])
         psih[t] = psi[t] + J[t] @ (psih[t+1] - P[t]) @ J[t].T
         mu_h[t] = mu_[t] + J[t] @ (mu_h[t+1] - B @ mu_[t])
+    # compute expectations
     for t in trange(T, desc="compute E[z] & E[zz']"):
         if t > 0:
             zt_[t] = psih[t] @ J[t-1].T + np.outer(mu_h[t], mu_h[t-1])
@@ -243,7 +244,7 @@ if __name__ == '__main__':
     X = np.loadtxt('./dat/86_11.amc.4d', delimiter=',')
     X = scale(X)
 
-    model = DCMF(X, 4, weight=.8)
+    model = DCMF(X, 2, weight=.0)
     model.em(max_iter=20)
     print('rmse:', model.rmse)
     model.save_model()

@@ -11,14 +11,13 @@ import matplotlib.cm as cm
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import normalize
 from scipy.linalg import pinv
-from tensorly import unfold, vec_to_tensor
+from tensorly import unfold, vec_to_tensor, tensor_to_vec
 from tensorly.tenalg import kronecker
 from tensorly.tucker_tensor import tucker_to_tensor
 from tqdm import tqdm, trange
 from dataset import import_tensor, normalize_tensor
 from myplot import *
 warnings.filterwarnings("ignore")
-
 
 class Facets(object):
     """
@@ -35,7 +34,7 @@ class Facets(object):
     Output: model parameter set:
         - U: observation tensor
         - B: transition tensor
-        - Z0: initial state mean
+        - z0: initial state mean
         - sgm0: initial state covariance
         - sgmO: transition covariance
         - sgmR: observation covariance
@@ -74,12 +73,19 @@ class Facets(object):
             print('================')
             print(' iter', iter + 1)
             print('================')
-            (Ev, Evv, Ez, self.U, self.B, self.Z0,
-             self.sgm0, self.sgmO, self.sgmR, self.sgmV, self.xi) = _em(
-                self.X, self.W, self.T, self.S, self.L, self.M, self.N,
-                self._lambda, Ev, Evv, self.U, self.B,
-                self.Z0, self.sgm0, self.sgmO, self.sgmR, self.sgmV, self.xi
-            )
+            try:
+                (Ev, Evv, Ez, self.U, self.B, self.z0, self.psi0,
+                 self.sgm0, self.sgmO, self.sgmR,
+                 self.sgmV, self.xi) = _em(
+                    self.X, self.W, self.T, self.S,
+                    self.L, self.M, self.N, self._lambda,
+                    Ev, Evv, self.U, self.B, self.z0, self.psi0,
+                    self.sgm0, self.sgmO, self.sgmR, self.sgmV, self.xi)
+            except KeyboardInterrupt:
+                self.z = Ez
+                print(self.z[:3])
+                self.save_params()
+                break
 
             self.llh.append(self.compute_log_likelihood())
             # if abs(llh[-1] - llh[-2]) < tol:
@@ -87,13 +93,12 @@ class Facets(object):
             #     break
             print("log-likelihood=", self.llh[-1])
 
-            sgmV = deepcopy(self.sgmV)
-            xi = deepcopy(self.xi)
+            self.z0_log.append(self.z0)
             self.sgm0_log.append(self.sgm0)
             self.sgmO_log.append(self.sgmO)
             self.sgmR_log.append(self.sgmR)
-            self.sgmV_log.append(sgmV)
-            self.xi_log.append(xi)
+            self.sgmV_log.append(deepcopy(self.sgmV))
+            self.xi_log.append(deepcopy(self.xi))
 
         # EZ = Ez.reshape((self.T, *self.L))
         # print(EZ.shape, self.U[0].shape)
@@ -121,15 +126,17 @@ class Facets(object):
     def _initialize_parameters(self, setseed=False):
         if setseed: np.random.seed(777)
         L, M, N = self.L, self.M, self.N
+        Lm = int(np.prod(L))
         rand_func = np.random.rand
-        self.U = [rand_func(N[m], L[m]) * 2 - 1 for m in range(M)]
-        self.B = [rand_func(L[m], L[m]) * 2 - 1 for m in range(M)]
-        self.Z0 = rand_func(*self.L) * 2 - 1
-        self.sgm0 = rand_func() * 5
-        self.sgmO = rand_func() * 5
-        self.sgmR = rand_func() * 5
-        self.sgmV = rand_func(M) * 2
-        self.xi = rand_func(M) * 2
+        self.U = [rand_func(N[m], L[m]) for m in range(M)]
+        self.B = [rand_func(L[m], L[ m]) for m in range(M)]
+        self.z0 = rand_func(Lm) * .001
+        self.psi0 = rand_func(Lm, Lm)
+        self.sgm0 = rand_func() * 1
+        self.sgmO = rand_func() * 1
+        self.sgmR = rand_func() * 1
+        self.sgmV = rand_func(M) * 1
+        self.xi = rand_func(M) * 1
 
     def _initialize_logger(self):
         self.llh = []
@@ -138,6 +145,7 @@ class Facets(object):
         self.sgmR_log = []
         self.sgmV_log = []
         self.xi_log = []
+        self.z0_log = []
 
     def save_params(self, outdir='./out/tmp/', viz=True):
         if os.path.exists(outdir):
@@ -148,7 +156,7 @@ class Facets(object):
             np.savetxt(outdir+f"S_{m}.txt", self.S[m])
             np.savetxt(outdir+f"U_{m}.txt", self.U[m])
             np.savetxt(outdir+f"B_{m}.txt", self.B[m])
-        np.save(outdir+"Z0.txt", self.Z0)
+        np.save(outdir+"z0.txt", self.z0)
         with open(outdir+"covars.txt", "w") as f:
             f.write(f"sigma_0, {self.sgm0}\n")
             f.write(f"sigma_O, {self.sgmO}\n")
@@ -156,7 +164,7 @@ class Facets(object):
         np.savetxt(outdir+"sigma_V.txt", self.sgmV)
         np.savetxt(outdir+"Xi.txt", self.xi)
         np.savetxt(outdir+"vec_z.txt", self.z)
-        np.save(outdir+"recon.txt", self.recon_)
+        # np.save(outdir+"recon.txt", self.recon_)
         if viz: viz_params(self, outdir)
 
 def viz_params(facets, outdir):
@@ -187,6 +195,9 @@ def viz_params(facets, outdir):
     plot(facets.xi_log, title="Xi",
         xlabel="# of iter (EM)", ylabel="Value",
         outfn=outdir+"xi_log.png")
+    plot(facets.z0_log, title="z0",
+        xlabel="# of iter (EM)", ylabel="Value",
+        outfn=outdir+"z0_log.png")
 
 
 def compute_contextual_matrices(tensor, n_modes):
@@ -206,11 +217,6 @@ def _context_expectation_aux(N, L, S, U, xi, sgmV):
         upsilon = xi * Minv
         Ev[j] = Minv @ U.T @ S[:, j]
         Evv[j] = upsilon + np.outer(Ev[j], Ev[j])
-        # ???
-        # Minv = pinv(U.T @ U + xi / sgmV * np.eye(L))
-        # upsilon = Minv
-        # Ev[j] = Minv @ U.T @ S[:, j]
-        # Evv[j] = upsilon + np.outer(Ev[j], Ev[j])
     return Ev, Evv
 
 def _compute_context_expectation(L, M, N, S, U, xi, sgmV, _lambda):
@@ -224,10 +230,10 @@ def _compute_context_expectation(L, M, N, S, U, xi, sgmV, _lambda):
     return Ev, Evv
 
 def _em(X, W, T, S, L, M, N, _lambda, Ev, Evv,
-        U, B, Z0, sgm0, sgmO, sgmR, sgmV, xi):
+        U, B, z0, psi0, sgm0, sgmO, sgmR, sgmV, xi):
     # compute mode T unfold
-    Xt = unfold(np.moveaxis(X, -1, 0), 0)
-    Wt = unfold(np.moveaxis(W, -1, 0), 0)
+    Xt = np.moveaxis(X, -1, 0)
+    Wt = np.moveaxis(W, -1, 0)
     for m in range(M):
         print(f"===> mode: {m}")
         """
@@ -235,28 +241,30 @@ def _em(X, W, T, S, L, M, N, _lambda, Ev, Evv,
         vectorized latent factors.
         """
         Ez, cov_zzt, cov_zz_, Ezzt, Ezz_ = _e_step(
-            Xt, Wt, T, L, N, U, B, Z0, sgm0, sgmO, sgmR, sgmV
+            Xt, Wt, T, L, N, U, B, z0, psi0, sgm0, sgmO, sgmR, sgmV
         )
         """
         Update parameters
         """
-        Z0, sgm0, sgmO, sgmR, sgmV[m], xi[m] = _m_step(
-            Xt, Wt, T, S[m], L, N, U, B, Z0, sgm0, sgmO, sgmR, sgmV, xi,
+        z0, psi0, sgm0, sgmO, sgmR, sgmV[m], xi[m] = _m_step(
+            Xt, Wt, T, S[m], L, N, U, B, z0, sgm0, sgmO, sgmR, sgmV, xi,
             _lambda[m], Ev, Evv, Ez, Ezzt, Ezz_, m
         )
 
-        cov_ZZt = reshape_covariance(cov_zzt, L, m)
-        cov_ZZ_ = reshape_covariance(cov_zz_[1:], L, m)
+        covZZt = reshape_covariance(cov_zzt, L, m)
+        covZZ_ = reshape_covariance(cov_zz_, L, m)
         EZ = reshape_expectation(Ez, L, m)
+        print(EZ.shape, covZZt.shape, covZZ_.shape)
         B[m] = update_transition_tensor(
-            m, B, L, cov_ZZt, cov_ZZ_, EZ
+            m, L, B, covZZt, covZZ_, EZ
         )
+        # print(B[m])
         U[m] = update_observation_tensor(
-            m, X, W, T, S[m], L, M, N, U, _lambda[m],
-            EZ, Ev[m], Evv[m], cov_ZZt,
-            Z0, sgm0, sgmO, sgmR, sgmV, xi[m]
+            m, Xt, Wt, T, S[m], L, M, N, U, _lambda[m],
+            EZ, Ev[m], Evv[m], covZZt,
+            z0, sgm0, sgmO, sgmR, sgmV, xi[m]
         )
-
+        # print(U[m])
         if _lambda[m] > 0:
             # update the expectations related to V(m)
             Ev[m], Evv[m] = _context_expectation_aux(
@@ -269,92 +277,94 @@ def _em(X, W, T, S, L, M, N, _lambda, Ev, Evv,
     print("===> sgmV:", sgmV)
     print("===> xi:", xi, "\n")
 
-    return Ev, Evv, Ez, U, B, Z0, sgm0, sgmO, sgmR, sgmV, xi
+    return Ev, Evv, Ez, U, B, z0, psi0, sgm0, sgmO, sgmR, sgmV, xi
 
-def _e_step(Xt, Wt, T, L, N, U, B, Z0, sgm0, sgmO, sgmR, sgmV):
+def _e_step(Xt, Wt, T, L, N, U, B, z0, psi0, sgm0, sgmO, sgmR, sgmV):
     # matricize U and B
-    U = kronecker(U[::-1])
-    B = kronecker(B[::-1])
-    # vectorize Z0
-    z0 = Z0.reshape(-1)
+    matU = kronecker(U, reverse=True)
+    matB = kronecker(B, reverse=True)
     # workspace
     Lp = np.prod(L)
     Np = np.prod(N)
-    K = [None] * T  # (T, Lp, ?), "?" depends on # of observations
     P = np.zeros((T, Lp, Lp))
     J = np.zeros((T, Lp, Lp))
     mu_ = np.zeros((T, Lp))
     psi = np.zeros((T, Lp, Lp))
     mu_h = np.zeros((T, Lp))
     psih = np.zeros((T, Lp, Lp))
-
-    # forward
+    # forward algorithm
     for t in trange(T, desc='forward'):
-        ot = Wt[t, :]  # indices of the observed entries of a tensor X
-        lt = sum(ot)
-        xt = Xt[t, ot]
-        Ht = U[ot, :]
+        ot = tensor_to_vec(Wt[t])  # indices of the observed entries of a tensor X
+        xt = tensor_to_vec(Xt[t])[ot]
+        lt = sum(ot)  # of observed samples
+        Ht = matU[ot, :]
         if t == 0:
-            K[0] = sgm0 * Ht.T @ pinv(sgm0 * Ht @ Ht.T + sgmR * np.eye(lt))
-            # K[0] = sgm0 * Ht.T @ pinv(Ht @ (sgm0 * np.eye(Lp)) @ Ht.T + sgmR * np.eye(lt))
-            # K[0] = sgm0 * np.eye(Lp) @ Ht.T @ pinv(Ht @ (sgm0 * np.eye(Lp)) @ Ht.T + sgmR * np.eye(lt))
-            mu_[0] = z0 + K[0] @ (xt - Ht @ z0)
+            K = sgm0 * Ht.T @ pinv(sgm0 * Ht @ Ht.T + sgmR * np.eye(lt))
+            # K = psi0 @ Ht.T @ pinv(Ht @ psi0 @ Ht.T + sgmR * np.eye(lt))
             # psi[0] = sgm0 * np.eye(Lp) - K[0] @ Ht
             psi[0] = sgm0 * (np.eye(Lp) - K[0] @ Ht)
-            # psi[0] = (np.eye(Lp) - K[0] @ Ht) @ (sgm0 * np.eye(Lp))
+            # psi[0] = (np.eye(Lp) - K @ Ht) @ psi0
+            mu_[0] = z0 + K @ (xt - Ht @ z0)
         else:
-            P[t-1] = B @ psi[t-1] @ B.T + sgmO * np.eye(Lp)
-            K[t] = P[t-1] @ Ht.T @ pinv(Ht @ P[t-1] @ Ht.T + sgmR * np.eye(lt))
-            mu_[t] = B @ mu_[t-1] + K[t] @ (xt - Ht @ B @ mu_[t-1])
-            psi[t] = (np.eye(Lp) - K[t] @ Ht) @ P[t-1]
+            P[t-1] = matB @ psi[t-1] @ matB.T + sgmO * np.eye(Lp)
+            K = P[t-1] @ Ht.T @ pinv(Ht @ P[t-1] @ Ht.T + sgmR * np.eye(lt))
+            mu_[t] = matB @ mu_[t-1] + K @ (xt - Ht @ matB @ mu_[t-1])
+            psi[t] = (np.eye(Lp) - K @ Ht) @ P[t-1]
 
     # backward
     mu_h[-1] = mu_[-1]
     psih[-1] = psi[-1]
     for t in tqdm(list(reversed(range(T-1))), desc='backward'):
-        J[t] = psi[t] @ B.T @ pinv(P[t])
-        mu_h[t] = mu_[t] + J[t] @ (mu_h[t+1] - B @ mu_[t])
+        J[t] = psi[t] @ matB.T @ pinv(P[t])
+        mu_h[t] = mu_[t] + J[t] @ (mu_h[t+1] - matB @ mu_[t])
         psih[t] = psi[t] + J[t] @ (psih[t+1] - P[t]) @ J[t].T
 
     # compute expectations
-    Ez = mu_h
-    cov_zzt = psih
-    cov_zz_ = np.zeros((T, Lp, Lp))
-    Ezzt = np.zeros((T, Lp, Lp))
-    Ezz_ = np.zeros((T, Lp, Lp))
+    ztt = np.zeros((T, Lp, Lp))
+    zt_ = np.zeros((T, Lp, Lp))
+    cov_zt_ = np.zeros((T, Lp, Lp))
     for t in trange(T, desc='compute expectations'):
         if t > 0:
-            cov_zz_[t] = psih[t] @ J[t-1].T
-            Ezz_[t] = cov_zz_[t] + np.outer(mu_h[t], mu_h[t-1])
-        Ezzt[t] = psih[t] + np.outer(mu_h[t], mu_h[t])
+            cov_zt_[t] = psih[t] @ J[t-1].T
+            zt_[t] = cov_zt_[t] + np.outer(mu_h[t], mu_h[t-1])
+        ztt[t] = psih[t] + np.outer(mu_h[t], mu_h[t])
+    zt = mu_h
+    cov_ztt = psih
+    return zt, cov_ztt, cov_zt_, ztt, zt_
 
-    return Ez, cov_zzt, cov_zz_, Ezzt, Ezz_
-
-def _m_step(Xt, Wt, T, S, L, N, U, B, Z0, sgm0, sgmO, sgmR, sgmV, xi,
+def _m_step(Xt, Wt, T, S, L, N, U, B, z0, sgm0, sgmO, sgmR, sgmV, xi,
             _lambda, Ev, Evv, Ez, Ezzt, Ezz_, mode):
     """
     Eq. (12)
     """
-    Umat = kronecker(U[::-1])
-    Bmat = kronecker(B[::-1])
-    Lp = np.prod(L)
+    Umat = kronecker(U, reverse=True)
+    Bmat = kronecker(B, reverse=True)
+    Lm = np.prod(L)
 
-    Z0_new = vec_to_tensor(Ez[0], L)
-    sgm0_new = np.trace(Ezzt[0] - np.outer(Ez[0], Ez[0])) / Lp
+    z0_new = deepcopy(Ez[0])
+    psi0_new = Ezzt[0] - np.outer(Ez[0], Ez[0])
+    sgm0_new = np.trace(Ezzt[0] - np.outer(Ez[0], Ez[0])) / Lm
+    if sgm0_new < 1.e-7:
+        sgm0_new = 1.e-7
 
-    res = sum(Ezz_[1:]) @ Bmat.T
-    sgmO_new = np.trace(
-        sum(Ezzt[1:]) - res.T - res
+    res = np.trace(
+        sum(Ezzt[1:])
+        - sum(Ezz_[1:]) @ Bmat.T
+        - (sum(Ezz_[1:]) @ Bmat.T).T
         + Bmat @ sum(Ezzt[:-1]) @ Bmat.T
-    ) / ((T - 1) * Lp)
+    )
+    sgmO_new = res / ((T - 1) * Lm)
 
     res = 0
     for t in range(T):
-        Wvec = Wt[t]
-        Xvec = Xt[t, Wvec]
+        Wvec = Wt[t].reshape(-1)
+        Xvec = Xt[t].reshape(-1)[Wvec]
+        # Wvec = tensor_to_vec(Wt[t])
+        # Xvec = tensor_to_vec(Xt[t])[Wvec]
         Uobs = Umat[Wvec, :]
         res += np.trace(Uobs @ Ezzt[t] @ Uobs.T)
         res += Xvec @ Xvec - 2 * Xvec @ (Uobs @ Ez[t])
+    print(res, Wt.sum())
     sgmR_new = res / Wt.sum()
 
     if _lambda > 0:
@@ -368,17 +378,15 @@ def _m_step(Xt, Wt, T, S, L, N, U, B, Z0, sgm0, sgmO, sgmR, sgmV, xi,
         sgmV_new = sgmV[mode]
         xi_new = xi[mode]
 
-    return Z0_new, sgm0_new, sgmO_new, sgmR_new, sgmV_new, xi_new
+    return z0_new, psi0_new, sgm0_new, sgmO_new, sgmR_new, sgmV_new, xi_new
 
 def update_observation_tensor(
-    mode, X, W, T, S, L, M, N, U, _lambda,
-    EZ, Ev, Evv, cov_ZZt, Z0, sgm0, sgmO, sgmR, sgmV, xi):
+    mode, Xt, Wt, T, S, L, M, N, U, _lambda,
+    EZ, Ev, Evv, cov_ZZt, z0, sgm0, sgmO, sgmR, sgmV, xi):
     """
     Eq. (19), (20)
     """
-    Xt = np.moveaxis(X, -1, 0)
-    Wt = np.moveaxis(W, -1, 0)
-    G = kronecker([U[m] for m in reversed(range(M)) if not m == mode]).T
+    G = kronecker(U, skip_matrix=mode, reverse=True).T
     for i in trange(N[mode], desc=f"update U[{mode}]"):
         A_11, A_12, A_21, A_22 = _compute_A(
             _lambda, mode, i, G, Xt, Wt, T, S, L, M, N,
@@ -387,56 +395,48 @@ def update_observation_tensor(
         numer = _lambda * A_11 / xi + (1 - _lambda) * A_12 / sgmR
         denom = _lambda * A_21 / xi + (1 - _lambda) * A_22 / sgmR
         U[mode][i, :] = numer @ pinv(denom)
-        row = numer @ pinv(denom)
-        # print(col, col.std())
-    print(U[mode])
     return U[mode]
 
 def _compute_A(_lambda, mode, i, G, Xt, Wt, T, S,
-               L, M, N, EZ, Ev, Evv, cov_ZZt):
-    Np = int(np.prod(N) / N[mode])
-    Lp = int(np.prod(L) / L[mode])
-    A_11 = sum([S[i, j] * Ev[j] for j in range(N[mode])]) if _lambda > 0 else 0
-    A_21 = sum(Evv) if _lambda > 0 else 0
-    A_12 = A_22 = 0
+               L, M, N, EZ, Ev, Evv, covZZt):
+    Nm = N[mode]
+    Lm = L[mode]
+    Nn = int(np.prod(N) / Nm)
+    Ln = int(np.prod(L) / Lm)
+    A_11 = A_21 = 0
+    A_12 = np.zeros(Lm)
+    A_22 = np.zeros((Lm, Lm))
+    if _lambda > 0:
+        A_11 = sum([S[i, j] * Ev[j] for j in range(Nm)])
+        A_21 = sum(Evv)
+    if _lambda == 1:
+        return A_11, A_12, A_21, A_22
     for t in range(T):
         Xtm = unfold(Xt[t], mode)
         Wtm = unfold(Wt[t], mode)
-        Xtm[~Wtm] = 0  # avoid nan
-        A_12 += sum([
-            # Wtm[i, j] * Xtm[i, j] * (G[:, j] @ EZ[t].T)  # ?
-            Wtm[i, j] * Xtm[i, j] * EZ[t] @ G[:, j]  # ?
-            for j in range(Np)
-        ])
-        # for j in range(Np):
-            # heatmap(_compute_b(G, cov_ZZt[t], j))
-            # heatmap(EZ[t] @ np.outer(G[:, j], G[:, j]) @ EZ[t].T)
-        # plt.show()
-        A_22 += sum([
-            Wtm[i, j] * (
-                # _compute_b(G, cov_ZZt[t], j)
-                + EZ[t] @ np.outer(G[:, j], G[:, j]) @ EZ[t].T
+        for j in range(Nn):
+            if Wtm[i, j] == 0:
+                continue
+            A_12 += Wtm[i, j] * Xtm[i, j] * EZ[t] @ G[:, j]
+            A_22 += Wtm[i, j] * (
+                _compute_b(G, covZZt[t], j)
+                + np.outer(EZ[t] @ G[:, j], EZ[t] @ G[:, j])
             )
-            # for j in range(Lp)
-            for j in range(Np)
-        ])
     return A_11, A_12, A_21, A_22
 
-def update_transition_tensor(mode, B, L, covZZt, covZZ_, EZ):
-    M = len(B)
+def update_transition_tensor(mode, L, B, covZZt, covZZ_, EZ):
     T = len(covZZt)
-    F = kronecker([B[m] for m in reversed(range(M))
-                        if not m == mode]).T
-    Lm = int(np.prod(L) / L[mode])
-    C1 = C2 = 0
+    F = kronecker(B, skip_matrix=mode, reverse=True).T
+    Lm = L[mode]
+    Ln = int(np.prod(L) / Lm)
+    C1 = np.zeros((Lm, Lm))
+    C2 = np.zeros((Lm, Lm))
     for t in trange(1, T, desc=f'update B[{mode}]'):
-        for j in range(Lm):
-            # C1 += _compute_b(F, covZZt[t-1], j)  # t = 1..T-1
-            C1 += EZ[t-1] @ np.outer(F[:, j], F[:, j]) @ EZ[t-1].T
-            # C2 += _compute_a(F, covZZ_[t-1], j)  # t = 2..T
-            C2 += np.outer(EZ[t, :, j], F[:, j]) @ EZ[t-1].T
-            # C2 += EZ[t, :, j] @ F[:, j] @ EZ[t-1].T
-    # print(C1.shape, C2.shape, EZ[0].T.shape)
+        for j in range(Ln):
+            C1 += _compute_b(F, covZZt[t-1], j)  # t = 1..T-1
+            C1 += np.outer(EZ[t-1] @ F[:, j], EZ[t-1] @ F[:, j])
+            C2 += _compute_a(F, covZZ_[t], j)  # t = 2..T
+            C2 += np.outer(EZ[t, :, j], EZ[t-1] @ F[:, j])
     return C2 @ pinv(C1)
 
 def _compute_a(F, cov, j):
@@ -453,34 +453,33 @@ def _compute_b(F, cov, j):
     P, I, Q, K = cov.shape
     b = np.zeros((P, Q))
     P = range(P)
-    I = range(I)
     Q = range(Q)
+    I = range(I)
     K = range(K)
-    # print(b.shape, F.shape, cov.shape)
     for p, i, q, k in itertools.product(P, I, Q, K):
         b[p, q] += F[k, j] * F[i, j] * cov[p, i, q, k]
     return b
 
-def reshape_expectation(Ez, rank, mode):
-    L0 = rank[mode]
-    L1 = int(np.prod(rank) / L0)
-    EZ = np.zeros((len(Ez), L0, L1))  # matricized E[z(t)]
-    for t, zt in enumerate(Ez):
-        EZ[t] = unfold(vec_to_tensor(zt, rank), mode)
-    return EZ
+def reshape_expectation(z, ranks, mode):
+    Lm = ranks[mode]
+    Ln = int(np.prod(ranks) / Lm)
+    Z = np.zeros((len(z), Lm, Ln))
+    # mode-m matricize E[z(t)]
+    for t, zt in enumerate(z):
+        Z[t] = unfold(zt.reshape(ranks), mode)
+    return Z
 
-def reshape_covariance(cov, rank, mode):
-    T = len(cov)
-    M = len(rank)
-    L0 = rank[mode]
-    L1 = int(np.prod(rank) / L0)
-    covZZ = np.zeros((T, L0, L1, L0, L1))
+def reshape_covariance(cov, ranks, mode):
+    M = len(ranks)
+    Lm = ranks[mode]
+    Ln = int(np.prod(ranks) / Lm)
+    mat_cov = np.zeros((len(cov), Lm, Ln, Lm, Ln))
     for t, cov_t in enumerate(cov):
         # 1. revert the cov to tensor form
-        cov_t = vec_to_tensor(cov_t, (*rank, *rank))
+        cov_t = cov_t.reshape((*ranks, *ranks))
         # 2. permute the order of the mode
         cov_t = np.moveaxis(cov_t, mode, 0)
-        cov_t = np.moveaxis(cov_t, mode + M, M)
+        cov_t = np.moveaxis(cov_t, mode + M, 0 + M)
         # 3. reshape the reordered covariance tensor
         #    by keeping the 1st and (M+1)-th mode fixed
         #    and concatenating data from the 2nd mode
@@ -489,10 +488,10 @@ def reshape_covariance(cov, rank, mode):
         #    to the (2M)-th mode into another mode
         new_shape = (
             cov_t.shape[0], np.prod(cov_t.shape[1:M]),
-            cov_t.shape[M], np.prod(cov_t.shape[M+1:2*M])
+            cov_t.shape[M], np.prod(cov_t.shape[M + 1:2 * M])
         )
-        covZZ[t] = cov_t.reshape(new_shape)
-    return covZZ
+        mat_cov[t] = cov_t.reshape(new_shape)
+    return mat_cov
 
 def reconstruct_matrix(U, Z, mode):
     # Lemma 3.2
@@ -515,13 +514,23 @@ if __name__ == '__main__':
     for i, geo in enumerate(countries):
         print(i, geo.name)
 
-    geo = [185, 179, 172, 153, 86, 83, 56, 53, 48]
+    geo = [185, 179, 172, 153, 83, 86, 56, 53, 48]
     # settings
-    ranks = [4, 3]
+    ranks = [3, 4]
     # weights = [1, 1]
-    weights = [1, 1]
+    # weights = [.5, .5]
+    weights = [0, 0]
+
 
     # infer
-    facets = Facets(X[geo[:5], :, -300:], ranks, weights)
+    facets = Facets(X[geo, :4, :], ranks, weights)
+    # X = np.zeros((3, 10, 5, 100))
+    # for t in range(100):
+    #     if t == 0:
+    #         X[:,:,:,0] = np.random.normal(0, .3, (3,10,5))
+    #     else:
+    #         X[:,:,:, t] = X[:,:,:,t-1] + np.random.normal(0, .3, (3, 10, 5))
+    # facets = Facets(X, ranks, weights)
+
     facets.em(max_iter=20)
     facets.save_params()

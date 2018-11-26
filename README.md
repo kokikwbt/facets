@@ -1,12 +1,13 @@
 # Facets
-
-This is a Python implementation for
+Pyhton inplementation of:
 1. Facets: Fast Comprehensive Mining of Coevolving High-order Time Series
-\[[download](http://ycai.ws.gc.cuny.edu/files/2015/07/Facets_KDD15.pdf)\],
+\[[PDF](http://ycai.ws.gc.cuny.edu/files/2015/07/Facets_KDD15.pdf)\],
 2. Fast Mining of a Network of Coevolving Time Series
-\[[download](http://ycai.ws.gc.cuny.edu/files/2015/03/NoT_sdm15.pdf)\].
+\[[PDF](http://ycai.ws.gc.cuny.edu/files/2015/03/NoT_sdm15.pdf)\].
 
-## Facets.py
+## Facets
+Given a Network of High-order Time Series (Net-Hits)
+$\mathcal{R} = (\mathcal{X}, \mathcal{W}, \mathcal{S}, \zeta)$
 Given a N-dimensional tensor series,
 
 facets.**Facets**(X, ranks, weights)

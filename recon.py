@@ -6,35 +6,59 @@ from tensorly.tucker_tensor import tucker_to_tensor
 
 outdir = "./out/tmp/"
 X = np.load(outdir+"X.npy")
-z = np.loadtxt(outdir+"vec_z.txt")
-U0 = np.loadtxt(outdir+"U_0.txt")
-U1 = np.loadtxt(outdir+"U_1.txt")
-
-rank = [3, 4]
 T = X.shape[-1]
-Z = np.zeros((T, 4,3))
+M = X.ndim - 1
+z = np.loadtxt(outdir+"vec_z.txt")
+U = [np.loadtxt(outdir+f"U_{i}.txt") for i in range(M)]
+ranks = [U[i].shape[1] for i in range(M)]
+Z = np.zeros((T, *ranks))
 for t in range(T):
-    Z[t] = z[t].reshape((4,3))
+    Z[t] = z[t].reshape(ranks)
+
+plt.plot(z)
+plt.show()
+for m in range(M):
+    pred = np.zeros((T, X.shape[m]))
+    for t in range(T):
+        print(unfold(Z[t], m).shape, U[m].shape)
+        print(kronecker(U, skip_matrix=m, reverse=True).T.shape)
+        X_n = U[m] @ unfold(Z[t], m) @ kronecker(U, skip_matrix=m, reverse=True).T
+        pred[t] = X_n[:, m]
+    # plt.plot((X, -1)[:, i])
+    plt.plot(pred)
+    plt.show()
+
+matU = kronecker(U, reverse=True)
+predict = z @ matU.T
+print(predict.shape)
+print(unfold(X, -1).shape)
+for i in range(unfold(X,-1).shape[1]):
+    plt.plot(unfold(X, -1)[:, i])
+    plt.plot(predict[:, i])
+    plt.show()
+exit()
+
 # print(Z.shape)
 # Z = np.moveaxis(Z, 1,2)
 # print(Z.shape)
 Xn = []
 for t in range(T):
-    Xn.append(tucker_to_tensor(Z[t], [U0, U1]))
+    Xn.append(tucker_to_tensor(Z[t], U))
 Xn = np.array(Xn)
-print(U0.shape, U1.shape)
-print(rank)
+Xn = np.moveaxis(Xn, 0, -1)
 
-# Xn = np.zeros((T, 9, 10))
-# for t in range(T):
-#     Xn[t] = U0 @ unfold(Z[t], 0) @ U1.T
-
+# mode = 0
+# for i in range(X.shape[0]):
+#     for j in range(X.shape[1]):
+#         plt.plot(X[i, j, mode, :].T)
+#         plt.plot(Xn[i, j, mode, :].T)
+#         plt.show()
+# exit()
 for i in range(X.shape[0]):
-    plt.subplot(211)
-    plt.plot(X[i, :, :].T)
-    plt.subplot(212)
-    plt.plot(Xn[:, i, :])
-    plt.show()
+    for j in range(X.shape[1]):
+        plt.plot(X[i, j, :].T)
+        plt.plot(Xn[i, j, :].T)
+        plt.show()
 
 exit()
 for j in range(Xn.shape[1]):
