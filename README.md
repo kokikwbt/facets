@@ -6,12 +6,18 @@ Pyhton inplementation of:
 \[[PDF](http://ycai.ws.gc.cuny.edu/files/2015/03/NoT_sdm15.pdf)\].
 
 ## Facets
-Given a Network of High-order Time Series (Net-Hits)
-\(\mathcal{R}=(\mathcal{X},\mathcal{W},\mathcal{S},\zeta)\)
-Given a N-dimensional tensor series,
+Given a Network of High-order Time Series (Net-Hits),
+this algorithm can recover its missing parts indicated by
+the indicator tensor W or predict t time step after X.
 
-facets.**Facets**(X, ranks, weights)
+```python
+class facets.Facets
+```
+#### Methods
 
+```python
+__init__(self, X, ranks, weights)
+```
 ##### Parameters:
 - X: nd-array  
     - tensor of shape N_1 x N_2 x ... x T
@@ -23,12 +29,6 @@ facets.**Facets**(X, ranks, weights)
         if weight = 0, then the contextual information is ignored.  
         if weight = 1, then only the contextual information included to learn observation tensor U.
 
-##### Example
-```python
-  facets = Facets(X, rank, weights)
-  facets.em(max_iter=20)
-  facets.save_params()
-```
 
 ## DCMF
 #### Usage
